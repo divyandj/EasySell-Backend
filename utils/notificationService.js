@@ -1,59 +1,55 @@
 const admin = require("firebase-admin");
+const path = require("path");
 
-// ==========================================
-//  FIREBASE ADMIN INITIALIZATION
-// ==========================================
-
+// 1. Load the Service Account Key
+// Priority:
+// 1. Environment Variable (FIREBASE_SERVICE_ACCOUNT) - for Production (Render)
+// 2. Local File (serviceAccountKey.json) - for Development
 let serviceAccount;
 
 try {
-  if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
-    throw new Error("FIREBASE_SERVICE_ACCOUNT env variable missing");
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } else {
+    serviceAccount = require(path.join(__dirname, "../serviceAccountKey.json"));
   }
-
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 } catch (error) {
-  console.error("⚠️ Firebase service account not configured properly:", error.message);
+  console.error("⚠️ WARNING: Firebase Credentials not found (Enable FIREBASE_SERVICE_ACCOUNT env var or add serviceAccountKey.json).");
 }
 
-// Initialize Firebase only once
+// 2. Initialize Firebase Admin
 if (serviceAccount && !admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+    credential: admin.credential.cert(serviceAccount)
   });
   console.log("✅ Firebase Admin Initialized");
 }
 
-const messaging = serviceAccount ? admin.messaging() : null;
+const messaging = admin.messaging();
 
-// ==========================================
-//  NOTIFICATION HELPERS
-// ==========================================
+// --- Helper Functions ---
 
 /**
  * Sends a push notification to the 'admin_orders' topic
  */
 async function notifyNewOrder(orderId, amount, customerName) {
-  if (!messaging) {
-    console.warn("⚠️ Firebase messaging not available. Order notification skipped.");
-    return;
-  }
+  if (!serviceAccount) return;
 
   const message = {
     notification: {
       title: "🎉 New Order Received!",
-      body: `Order #${orderId} from ${customerName} for ₹${amount}`,
+      body: `Order #${orderId} from ${customerName} for ₹${amount}`
     },
     data: {
       orderId: String(orderId),
-      type: "order",
+      type: "order"
     },
-    topic: "admin_orders",
+    topic: "admin_orders"
   };
 
   try {
     await messaging.send(message);
-    console.log(`🔔 Order notification sent (Order ID: ${orderId})`);
+    console.log(`🔔 Notification sent: New Order ${orderId}`);
   } catch (error) {
     console.error("❌ FCM Error (Order):", error.message);
   }
@@ -63,32 +59,26 @@ async function notifyNewOrder(orderId, amount, customerName) {
  * Sends a push notification to the 'admin_new_users' topic
  */
 async function notifyNewUser(userName, userEmail) {
-  if (!messaging) {
-    console.warn("⚠️ Firebase messaging not available. User notification skipped.");
-    return;
-  }
+  if (!serviceAccount) return;
 
   const message = {
     notification: {
       title: "👤 New User Registered",
-      body: `${userName} just joined.`,
+      body: `${userName} just joined.`
     },
     data: {
       email: userEmail,
-      type: "user",
+      type: "user"
     },
-    topic: "admin_new_users",
+    topic: "admin_new_users"
   };
 
   try {
     await messaging.send(message);
-    console.log(`🔔 User notification sent (${userEmail})`);
+    console.log(`🔔 Notification sent: New User ${userEmail}`);
   } catch (error) {
     console.error("❌ FCM Error (User):", error.message);
   }
 }
 
-module.exports = {
-  notifyNewOrder,
-  notifyNewUser,
-};
+module.exports = { notifyNewOrder, notifyNewUser };
