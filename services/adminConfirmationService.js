@@ -199,6 +199,21 @@ async function confirmOrder(orderId, action, adminUid, storeHandle) {
     }
   }
 
+  // Propagate status to any nested catalogue orders that reference this payment order id.
+  // This is a best-effort batch outside the transaction to keep catalogue-order views in sync.
+  try {
+    const now = admin.firestore.Timestamp.now();
+    await propagateToNestedOrders(orderId, {
+      paymentStatus: result.paymentStatus,
+      confirmedAt: now,
+      confirmedBy: adminUid || '',
+      updatedAt: now,
+    });
+  } catch (e) {
+    // log but don't fail the response
+    console.warn('Failed to propagate to nested orders after confirmOrder:', e.message || e);
+  }
+
   return result;
 }
 
@@ -292,10 +307,48 @@ async function unresolveReconciledOrder(orderId, adminUid, storeHandle) {
   }));
 }
 
+// Ensure nested orders are updated when an order is moved back to review
+async function unresolveAndPropagate(orderId, adminUid, storeHandle) {
+  const result = await unresolveReconciledOrder(orderId, adminUid, storeHandle);
+  try {
+    const now = admin.firestore.Timestamp.now();
+    await propagateToNestedOrders(orderId, {
+      paymentStatus: result.paymentStatus,
+      unresolvedAt: now,
+      unresolvedBy: adminUid || '',
+      updatedAt: now,
+    });
+  } catch (e) {
+    console.warn('Failed to propagate unresolve to nested orders for', orderId, e.message || e);
+  }
+  return result;
+}
+
+// Helper to propagate payment status changes to nested catalogue orders (best-effort)
+async function propagateToNestedOrders(paymentOrderId, updates) {
+  try {
+    const snap = await db.collectionGroup('orders').where('paymentOrderId', '==', paymentOrderId).get();
+    if (snap.empty) return;
+    const batch = db.batch();
+    snap.docs.forEach((d) => {
+      try {
+        batch.update(d.ref, updates);
+      } catch (e) {
+        // ignore individual doc failures in preparation; commit may still fail later
+      }
+    });
+    await batch.commit();
+  } catch (e) {
+    // Non-fatal: log and continue
+    console.warn('Failed to propagate payment status to nested orders for', paymentOrderId, e.message || e);
+  }
+}
+
 module.exports = {
   listPendingUtrOrders,
   listReviewOrders,
   listHistoryOrders,
   confirmOrder,
-  unresolveReconciledOrder,
+  // Export wrapper that also propagates to nested orders
+  unresolveReconciledOrder: unresolveAndPropagate,
 };
