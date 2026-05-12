@@ -62,24 +62,24 @@ async function reopenDisputedOrder(orderId, adminUid, storeHandle) {
       targetBucket = await selectBucketForOrderTxPreferEmpty(tx, orderAmount, scopedStoreHandle);
     }
 
-    reserveBucketAmountTx(tx, targetBucket, orderAmount);
-
     let resolvedSuffix = Number(order.paiseSuffix || 0);
-    let suffixReserved = false;
+    let shouldReserveSuffix = false;
+
     if (targetBucket.bucketId === order.bucketId && Number.isFinite(resolvedSuffix) && resolvedSuffix >= 1) {
       const suffixRef = db.collection('suffixIndex').doc(suffixToDocId(targetBucket.bucketId, resolvedSuffix));
       const suffixSnap = await tx.get(suffixRef);
       if (!suffixSnap.exists) {
-        reserveSuffixTx(tx, targetBucket.bucketId, resolvedSuffix, orderId);
-        suffixReserved = true;
-      } else if (suffixSnap.get('orderId') === orderId) {
-        suffixReserved = true;
+        shouldReserveSuffix = true;
+      } else if (suffixSnap.get('orderId') !== orderId) {
+        resolvedSuffix = 0;
       }
+    } else {
+      resolvedSuffix = 0;
     }
 
-    if (!suffixReserved) {
+    if (!Number.isFinite(resolvedSuffix) || resolvedSuffix < 1) {
       resolvedSuffix = await allocateSuffixTx(tx, targetBucket.bucketId);
-      reserveSuffixTx(tx, targetBucket.bucketId, resolvedSuffix, orderId);
+      shouldReserveSuffix = true;
     }
 
     let uniquePayableAmount = Number(order.uniquePayableAmount || 0);
@@ -105,6 +105,10 @@ async function reopenDisputedOrder(orderId, adminUid, storeHandle) {
       updates.storeHandle = targetStoreHandle;
     }
 
+    reserveBucketAmountTx(tx, targetBucket, orderAmount);
+    if (shouldReserveSuffix) {
+      reserveSuffixTx(tx, targetBucket.bucketId, resolvedSuffix, orderId);
+    }
     tx.update(orderRef, updates);
     result = { orderId, paymentStatus: updates.paymentStatus };
   }));
